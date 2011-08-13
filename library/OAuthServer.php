@@ -33,6 +33,7 @@
 
 require_once 'OAuthRequestVerifier.php';
 require_once 'OAuthSession.php';
+require_once 'OAuthAdapterInterface.php';
 
 class OAuthServer extends OAuthRequestVerifier
 {
@@ -48,6 +49,8 @@ class OAuthServer extends OAuthRequestVerifier
 		'callto',
 		'mailto'
 	);
+
+	public $oauth_adapter;
 
 	/**
 	 * Construct the request to be verified
@@ -92,6 +95,12 @@ class OAuthServer extends OAuthRequestVerifier
 	 	if (array_key_exists('disallowed_uri_schemes', $options) && is_array($options['disallowed_uri_schemes'])) {
 	 		$this->disallowed_uri_schemes = $options['disallowed_uri_schemes'];
 	 	}
+	 	if (isset($options['oauth_adapter']) && 
+			($options['oauth_adapter'] instanceof OAuthAdapterInterface)) {
+
+			$this->oauth_adapter = $options['oauth_adapter'];
+		}
+
 	}
 	
 	/**
@@ -281,6 +290,32 @@ class OAuthServer extends OAuthRequestVerifier
 	 */
 	public function accessToken ()
 	{
+		// xauth
+		if($this->getParam('x_auth_mode', false) == 'client_auth') {
+			$xuser = $this->getParam('x_auth_username', false);
+			$xpass = $this->getParam('x_auth_password', false);
+
+			if(is_object($this->oauth_adapter)) {
+				$auth = $this->oauth_adapter;
+				$auth->authenticate($xuser, $xpass);
+				if(!$auth->hasIdentity())
+					throw new OAuthException2('Wrong username and password');
+
+				// Create a request token
+				$options = array();
+				$store  = OAuthStore::instance();
+				$token  = $store->addConsumerRequestToken($this->getParam('oauth_consumer_key', true), $options);
+				$this->setParam('oauth_token', $token['token']);
+
+				$this->authorizeVerify();
+
+				// post method
+				$authorized = true;
+				$id = $auth->getIdentity();
+				$this->authorizeFinish($authorized, $id);
+			}
+		}
+
 		OAuthRequestLogger::start($this);
 
 		try
@@ -295,20 +330,25 @@ class OAuthServer extends OAuthRequestVerifier
 			}
 
 			$verifier = $this->getParam('oauth_verifier', false);
- 			if ($verifier) {
- 				$options['verifier'] = $verifier;
- 			}
-			
+			if ($verifier) {
+				$options['verifier'] = $verifier;
+			}
+
 			$store  = OAuthStore::instance();
 			$token  = $store->exchangeConsumerRequestForAccessToken($this->getParam('oauth_token', true), $options);
 			$result = 'oauth_token='.$this->urlencode($token['token'])
-					.'&oauth_token_secret='.$this->urlencode($token['token_secret']);
-					
+				.'&oauth_token_secret='.$this->urlencode($token['token_secret']);
+
 			if (!empty($token['token_ttl']))
 			{
 				$result .= '&xoauth_token_ttl='.$this->urlencode($token['token_ttl']);
 			}
-					
+
+			if(is_object($this->oauth_adapter) and $this->oauth_adapter->hasIdentity()) 
+			{
+				$result .= "&oauth_identity=" .$this->oauth_adapter->getIdentity();
+			}
+
 			header('HTTP/1.1 200 OK');
 			header('Content-Length: '.strlen($result));
 			header('Content-Type: application/x-www-form-urlencoded');
@@ -322,7 +362,7 @@ class OAuthServer extends OAuthRequestVerifier
 
 			echo "OAuth Verification Failed: " . $e->getMessage();
 		}
-		
+
 		OAuthRequestLogger::flush();
 		exit();
 	}	
