@@ -280,6 +280,11 @@ class OAuthRequestVerifier extends OAuthRequest
 		}
 
 		$sig = $this->getSignatureMethod($signature_method);
+
+        if($this->getParam('x_auth_mode', false) == 'client_auth') {
+			$signature = $sig->signature($this, $data, $consumer_secret, $token_secret);
+		}
+
 		if (!$sig->verify($this, $data, $consumer_secret, $token_secret, $signature))
 		{
 			throw new OAuthException2('Signature verification failed ('.$signature_method.')');
